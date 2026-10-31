@@ -1,0 +1,20 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  name: hello-pod
+  labels:
+    zone: prod
+    version: v1
+spec:
+  containers:
+  - name: hello-ctr
+    image: nigelpoulton/k8sbook:1.0
+    ports:
+    - containerPort: 8080
+    resources:
+        requests:      # minimums, used by the scheduler
+            cpu: 0.5
+            memory: 256Mi
+        limits:        # maximums, enforced via the runtime
+            cpu: 1.0
+            memory: 512Mi

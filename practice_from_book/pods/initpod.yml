@@ -1,0 +1,16 @@
+kind: Pod
+apiVersion: v1
+metadata:
+  name: initpod
+  labels:
+    app: initializer
+spec:
+  initContainers:
+  - name: init-ctr
+    image: busybox:1.28.4
+    command: ['sh', '-c', 'until nslookup k8sbook; do echo waiting for k8sbook service; sleep 1; done; echo Service found!']  # will wait until you create the k8sbook Service
+  containers:
+  - name: web-ctr
+    image: nigelpoulton/web-app:1.0
+    ports:
+    - containerPort: 8080
