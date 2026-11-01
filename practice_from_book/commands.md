@@ -98,3 +98,14 @@ kubectl exec <pod_name> -- curl localhost:8080 # FAILED
 kubectl get svc lb-svc
 curl <EXTERNAL-IP>:8080
 ```
+
+## Services
+### Commands
+```bash
+kubectl expose deployment svc-test --type=LoadBalancer   #create svc from existing Deployment
+kubectl get svc -o wide  # to see the external ip and nodeport
+kubectl describe svc svc-test # shows endpoints,type,ip address etc
+
+kubectl get endpointslices   # to see the endpoint of the service
+kubectl describe endpointslices <name> # to see the endpoint of the service in details
+```
