@@ -87,6 +87,8 @@ kubectl rollout resume deploy hello-deploy    # resume the rollout
 kubectl rollout undo deploy/hello-deploy      # undo last revision
 kubectl rollout undo deploy/hello-deploy --to-revision=1 # undo to specific revision
 
+kubectl get replicaset  # check replicaset
+
 #cleanup
 kubectl delete -f deploy.yml
 kubectl delete -f lb.yml
@@ -152,6 +154,19 @@ curl -H "Host: shield.mcu.com" http://localhost:8080/
 
 # Test path-based routing
 curl -H "Host: mcu.com" http://localhost:8080/shield
+```
 
+## Service Discovery
+
+```bash
+# check cluster DNS info
+kubectl get pods   -n kube-system -l k8s-app=kube-dns   
+kubectl get deploy -n kube-system -l k8s-app=kube-dns
+kubectl get svc    -n kube-system -l k8s-app=kube-dns
+
+kubectl get all -n <namespace>  # check all objects (pods,services,deployments,replicasets etc) from specific namespace
+
+curl ent:8080                           # Resolves short names to the local Namespace
+curl ent.prod.svc.cluster.local:8080    # Specifying FQDNs to connect across Namespaces
 
 ```
