@@ -109,3 +109,49 @@ kubectl describe svc svc-test # shows endpoints,type,ip address etc
 kubectl get endpointslices   # to see the endpoint of the service
 kubectl describe endpointslices <name> # to see the endpoint of the service in details
 ```
+
+## Ingress
+### GCP setup
+- One-time setup: 
+    - install the gcloud CLI and run
+    - `gcloud components install gke-gcloud-auth-plugin kubectl`
+    - `gcloud auth login`
+    - `gcloud config set project <PROJECT_ID>` 
+    - `gcloud services enable container.googleapis.com`
+- Create the cluster name **tkb-new**:`gcloud container clusters create-auto tkb-new --region asia-southeast1`
+- Connect kubectl: `gcloud container clusters get-credentials tkb-new --zone asia-southeast1` merges the cluster into **~/.kube/config** and switches to the context `gke_<project>_<zone>_tkb`. You don't download or rename a kubeconfig file the way you do for LKE.
+- `kubectl get nodes` shows three `gke-tkb-default-pool-...` nodes with ROLES `<none>`. They're all workers, because Google runs the control plane for you.
+- Delete the cluster when done: `gcloud container clusters delete tkb-new --zone asia-southeast1`. Then check Compute Engine → Disks for retained volumes, which keep costing money
+
+### Running the hands-on on GKE
+The apps (app.yml), the hosts-file step and the tests stay the same. Choose one of two controllers.
+
+- GKE needs one extra step first, because the installer creates cluster-wide RBAC and your Google account must be cluster-admin to do that: `kubectl create clusterrolebinding cluster-admin-binding --clusterrole cluster-admin --user $(gcloud config get-value account)`.
+- Then apply the same controller URL (`kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.12.0/deploy/static/provider/cloud/deploy.yaml`) and the same `ig-all.yml`, unchanged. The controller's LoadBalancer Service gets a Google Cloud network load balancer, and ADDRESS shows its public IP. Put that IP in your hosts file.
+- Remember that ingress-nginx is retired (see Deeper dive). That's fine for this lab, but not for real clusters.
+
+### Commands
+```bash
+kubectl get pods -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx # to see the ingress-nginx pods
+kubectl get svc -n ingress-nginx # to see the ingress-nginx service
+kubectl get ingressclass # to see the ingress class
+
+## Test ingress with curl (Bypassing DNS & Web Filters)
+# Test shield host
+curl -H "Host: shield.mcu.com" http://<INGRESS_IP>/
+# Test mcu.com/shield
+curl -H "Host: mcu.com" http://<INGRESS_IP>/shield
+
+
+
+## Test with port forwarding
+kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80
+
+# Test host-based routing
+curl -H "Host: shield.mcu.com" http://localhost:8080/
+
+# Test path-based routing
+curl -H "Host: mcu.com" http://localhost:8080/shield
+
+
+```

@@ -1,0 +1,52 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcu-all
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: / #tells the controller to make a best-effort attempt to rewrite paths to the path your app expects. This example rewrites incoming paths to “/”. For example, traffic hitting the load balancer on the mcu.com/shield path will have the path rewritten to mcu.com/
+spec:
+  ingressClassName: nginx   # tells Kubernetes this Ingress object needs to be managed by the NGINX Ingress controller you installed earlier
+  rules:
+  # if the request url is shield.mcu.com then send it to shield service
+  # if the request url is hydra.mcu.com then send it to hydra service
+  - host: shield.mcu.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: svc-shield 
+            port:
+              number: 8080
+  
+  - host: hydra.mcu.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: svc-hydra
+            port:
+              number: 8080
+
+  # if the request url is mcu.com/shield then send it to shield service
+  # if the request url is mcu.com/hydra then send it to hydra service
+  - host: mcu.com
+    http:
+      paths:
+      - path: /shield
+        pathType: Prefix
+        backend:
+          service:
+            name: svc-shield
+            port:
+              number: 8080
+      - path: /hydra
+        pathType: Prefix
+        backend:
+          service:
+            name: svc-hydra
+            port:
+              number: 8080
