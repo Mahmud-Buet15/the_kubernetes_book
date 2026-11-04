@@ -178,3 +178,39 @@ kubectl get pv
 kubectl get pvc
 
 ```
+
+## ConfigMap
+```bash
+## Creating ConfigMaps imperatively
+# using --from-literal
+kubectl create configmap testmap1 \
+  --from-literal shortname=SAFC \
+  --from-literal longname="Sunderland Association Football Club"
+
+# using --from-file
+kubectl create configmap testmap2 --from-file cmfile.txt
+
+## inspecting
+kubectl get cm
+kubectl describe cm <configmap_name>
+kubectl get cm <configmap_name> -o yaml
+
+kubectl exec <podname> -- env | grep NAME   # inspecting specific env variable from a pod
+
+kubectl logs <pod_name> -c <container_name> # check logs of specific container of a pod
+
+```
+
+## Secrets
+```bash
+## Creating Secrets imperatively
+# using --from-literal
+kubectl create secret generic creds \
+  --from-literal user=nigelpoulton \
+  --from-literal pwd=Password123
+
+kubectl get secrets creds -o yaml # inspect the secrets
+echo <base64_encoded_secret> | base64 -d    # decoding secret value
+
+
+```
