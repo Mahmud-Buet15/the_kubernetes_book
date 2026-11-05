@@ -1,0 +1,24 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: read-deployments
+rules:
+- verbs: ["get", "watch", "list"]
+  apiGroups: ["apps"]
+  resources: ["deployments"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: read-deployments
+  namespace: dev
+subjects:
+- kind: User
+  name: sky
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole            # a RoleBinding can reference a ClusterRole
+  name: read-deployments
+  apiGroup: rbac.authorization.k8s.io
+---
+# ...same RoleBinding again with namespace: prod

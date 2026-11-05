@@ -232,3 +232,41 @@ kubectl delete sts tkb-sts
 kubectl explain sts.spec.updateStrategy # explain statefulset update strategy
 
 ```
+
+
+## API security and RBAC
+```bash
+kubectl api-resources --sort-by name -o wide  # check available resources for the cluster (API version, namespaced or not, etc.)
+
+# initiate
+kubectl create namespace dev # create a namespace
+kubectl get ns # check namespaces
+kubectl apply -f read_deployments.yml # apply roles and rolebindings for specific namespace
+
+# get role info
+kubectl get role --all-namespaces # check roles from all namespaced
+kubectl get rolebindings --all-namespaces # check rolebindings from all namespaced
+
+kubectl get clusterrole # check cluster roles
+kubectl get clusterrolebindings  # check cluster rolebindings
+
+# check details
+kubectl describe role <role_name> -n <namespace> # describe role of specific namespace
+kubectl describe rolebindings <rolebinding_name> -n <namespace> # describe rolebinding of specific namespace
+kubectl describe clusterrole <clusterrole_name> # describe cluster role
+kubectl describe clusterrolebindings <clusterrolebinding_name> # describe cluster rolebinding
+
+# Examples
+kubectl get role -n dev
+kubectl describe role read-deployments -n dev
+
+kubectl describe clusterrole cluster-admin
+kubectl get clusterrolebindings | grep cluster-admin 
+kubectl describe clusterrolebindings cluster-admin   
+
+# Test permissions without guessing
+kubectl auth can-i create deployments -n terran
+kubectl auth can-i list deployments -n shield --as sky     # impersonate a user (needs rights to impersonate)
+kubectl auth can-i list deployments -n dev --as sky        # impersonate a user (needs rights to impersonate)
+kubectl auth can-i --list -n shield                         # everything you may do there
+```
