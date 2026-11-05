@@ -211,6 +211,24 @@ kubectl create secret generic creds \
 
 kubectl get secrets creds -o yaml # inspect the secrets
 echo <base64_encoded_secret> | base64 -d    # decoding secret value
+```
 
+## StatefulSets
+```bash
+
+kubectl get sts # check statefulsets
+kubectl get sts --watch
+kubectl describe sts <sts_name> # describe statefulsets
+
+kubectl describe pod <StatefulSets-pod> | grep ClaimName # check PV assigned to statefulset pods
+
+# checking existance of DNS names from jump-pod 
+dig SRV dullahan.default.svc.cluster.local
+
+# deleting stateful sets (scaling down to 0 before deleting)
+kubectl scale sts tkb-sts --replicas=0
+kubectl delete sts tkb-sts
+
+kubectl explain sts.spec.updateStrategy # explain statefulset update strategy
 
 ```
