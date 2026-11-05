@@ -270,3 +270,36 @@ kubectl auth can-i list deployments -n shield --as sky     # impersonate a user 
 kubectl auth can-i list deployments -n dev --as sky        # impersonate a user (needs rights to impersonate)
 kubectl auth can-i --list -n shield                         # everything you may do there
 ```
+
+## The Kubernetes API
+```bash
+# Hands-on: talking REST directly
+kubectl proxy --port 9000 &        # exposes the API on localhost and handles auth
+curl -X GET http://localhost:9000/api/v1/namespaces/shield/pods   # PodList, items: []
+curl -X GET http://localhost:9000/api/v1/namespaces
+curl -v -X GET http://localhost:9000/api/v1/namespaces/shield/pods
+#  > lines = sent: GET path, Accept: */*
+#  < lines = received: HTTP/1.1 200 OK, Content-Type: application/json,
+#    X-Kubernetes-Pf-* (priority and fairness headers)
+
+
+# POST and DELETE a Namespace
+curl -X POST -H "Content-Type: application/json" \
+  --data-binary @ns.json http://localhost:9000/api/v1/namespaces
+kubectl get ns                                  # shield Active
+curl -X DELETE -H "Content-Type: application/json" \
+  http://localhost:9000/api/v1/namespaces/shield  # status.phase: Terminating
+
+
+# Inspecting the API
+kubectl api-resources          # names, short names, APIVERSION, NAMESPACED, KIND
+kubectl api-versions           # enabled group/versions (spot alpha, multiple versions)
+kubectl explain <kind>         # KIND and VERSION of a resource
+curl http://localhost:9000/api     # core group versions: ["v1"]
+curl http://localhost:9000/apis    # APIGroupList with preferredVersion per group
+
+# Watch kubectl's HTTP calls
+kubectl get pods -n shield -v=6     # prints GET https://<server>/api/v1/namespaces/shield/pods ... 200 OK
+kubectl get pods -n shield -v=8     # also prints request and response bodies
+
+```
