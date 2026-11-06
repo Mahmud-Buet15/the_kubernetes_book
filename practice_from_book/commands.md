@@ -303,3 +303,32 @@ kubectl get pods -n shield -v=6     # prints GET https://<server>/api/v1/namespa
 kubectl get pods -n shield -v=8     # also prints request and response bodies
 
 ```
+
+
+## Threat Modeling
+### PSS and PSA
+```bash
+kubectl create ns psa-test
+
+# enforce PSS
+kubectl label --overwrite ns psa-test pod-security.kubernetes.io/enforce=baseline
+kubectl apply -f psa-pod.yml      # privileged: true -> Forbidden: violates PodSecurity "baseline:latest"
+
+# set privileged: false
+kubectl apply -f psa-pod.yml      # pod/psa-pod created
+
+# checking what might happen if further restricted PSS enforced
+kubectl label --dry-run=server --overwrite ns psa-test pod-security.kubernetes.io/enforce=restricted
+#  warns: allowPrivilegeEscalation != false, unrestricted capabilities,
+#         runAsNonRoot != true, seccompProfile
+
+# implementing further restricted PSS
+kubectl label --overwrite ns psa-test pod-security.kubernetes.io/enforce=restricted
+kubectl get pods -n psa-test      # psa-pod still Running: PSA only acts on create/modify
+
+# enforce multiple PSS (enforce, warn, audit)
+kubectl label --overwrite ns psa-test \
+  pod-security.kubernetes.io/enforce=baseline \
+  pod-security.kubernetes.io/warn=restricted \
+  pod-security.kubernetes.io/audit=restricted
+```
