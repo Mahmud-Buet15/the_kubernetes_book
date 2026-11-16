@@ -259,6 +259,27 @@ You need three tools: Docker, a Kubernetes cluster and `kubectl`. Docker Desktop
 - `kubectl get nodes` shows three `lke...` nodes with ROLES `<none>`: all workers, because Linode hides the managed control plane.
 - **Delete the cluster when done** to avoid charges.
 
+### Option 3: Google Kubernetes Engine (GKE, cloud)
+
+- Also a **hosted Kubernetes** service, used here instead of Linode. Pick a **Standard, zonal** cluster: it gives you 3 real worker nodes, like the book's LKE cluster, and Autopilot hides node settings.
+- Cost: new Google Cloud accounts get **$300 free credit**. GKE charges a **$0.10/hour cluster fee**, but the **$74.40 monthly free-tier credit** covers one zonal or Autopilot cluster. You still pay for the node VMs, disks and load balancers.
+- One-time setup: install the gcloud CLI, then run `gcloud components install gke-gcloud-auth-plugin kubectl`, `gcloud auth login`, `gcloud config set project <PROJECT_ID>` and `gcloud services enable container.googleapis.com`.
+- Create the cluster (name `tkb`, a nearby zone, **3 × e2-medium** nodes):
+
+```bash
+gcloud container clusters create tkb \
+  --zone us-central1-a \
+  --num-nodes 3 \
+  --machine-type e2-medium \
+  --release-channel regular
+```
+
+- Connect kubectl: `gcloud container clusters get-credentials tkb --zone us-central1-a` merges the cluster into **\~/.kube/config** and switches to the context `gke_<project>_<zone>_tkb`. You don't download or rename a kubeconfig file the way you do for LKE.
+- `kubectl get nodes` shows three `gke-tkb-default-pool-...` nodes with ROLES `<none>`. They're all workers, because Google runs the control plane for you.
+- **Chapter 8 (Ingress):** LoadBalancer Services work as-is; GKE creates a Google Cloud load balancer with a public IP.
+- **Chapter 11 (Storage):** the default class is `standard-rwo` (provisioner `pd.csi.storage.gke.io`, a balanced Persistent Disk, WaitForFirstConsumer, Delete). In the book's YAML, change `provisioner: linodebs.csi.linode.com` to `provisioner: pd.csi.storage.gke.io` and add `parameters: {type: pd-balanced}`. Also replace `linode-block-storage` class names with your own class or `standard-rwo`.
+- **Delete the cluster when done:** `gcloud container clusters delete tkb --zone us-central1-a`. Then check Compute Engine → Disks for retained volumes, which keep costing money.
+
 ### Configuring kubectl
 
 - Keep kubectl within **one minor version** of the cluster (cluster 1.32 → kubectl 1.31–1.33).
@@ -405,7 +426,13 @@ All containers in a Pod land on the same node. Put containers in one Pod only if
 
 Deployment is **atomic**: a Pod serves requests only when all its containers run.
 
+&#91;embedded content: deploying a Pod · the 9 steps above, one decision\]
+
+The numbers match the steps above. If no node fits, the Pod stays Pending and the scheduler keeps retrying until room appears.
+
 ### Lifecycle
+
+&#91;image: image.png\]
 
 - **Pending** (finding a node, pulling images) → **Running** (all containers up) → stays Running if long-lived (web server) or goes to **Succeeded** when a short-lived task (batch job) completes; failure ends in **Failed**.
 - **Mortal:** a failed or deleted Pod cannot be restarted; a controller replaces it with a new Pod (new UID, new IP, no state). Same for node failure, eviction, scaling, updates and rollbacks.
@@ -480,12 +507,12 @@ spec:
 
 | Command | What it does |
 | --- | --- |
-| `kubectl apply -f pod.yml` | Post the manifest to the API server |
+| `kubectl apply -f pod.yml` | Post the manifest to the API server. `-f` indicates file name |
 | `kubectl get pods [-o wide \| -o yaml]` | Status; `-o yaml` shows everything: `spec` = desired state, `status` = observed state (plus defaults you didn't set) |
 | `kubectl get pods --watch` | Stream status changes |
 | `kubectl describe pod <pod>` | Formatted overview incl. conditions and **Events** |
 | `kubectl logs <pod> [--container <name>]` | Logs; defaults to the first container |
-| `kubectl exec <pod> -- <cmd>` | Run a command in the container (remote execution) |
+| `kubectl exec <pod> -- <cmd>` | Run a command in the container (remote execution); in a multi-container Pod it's the first container unless -c names another Ex: `kubectl exec hello-pod -- cat package.json` |
 | `kubectl exec -it <pod> -- sh` | Interactive exec session (like SSH) |
 | `kubectl edit pod <pod>` | Edit a live object (most Pod fields are rejected as immutable) |
 | `kubectl delete pod <a> <b>` / `kubectl delete -f <file>` | Delete by name or by manifest |
@@ -513,6 +540,12 @@ resources:
 ### Init container example (`initpod.yml`)
 
 ```yaml
+kind: Pod
+apiVersion: v1
+metadata:
+  name: initpod
+  labels:
+    app: initializer
 spec:
   initContainers:
   - name: init-ctr
@@ -530,6 +563,12 @@ Status shows `Init:0/1` (Pod phase Pending) until you create the `k8sbook` Servi
 ### Sidecar example (`initsidecar.yml`)
 
 ```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: git-sync
+  labels:
+    app: sidecar
 spec:
   initContainers:
   - name: ctr-sync
@@ -540,7 +579,7 @@ spec:
       mountPath: /tmp/git
     env:
     - name: GIT_SYNC_REPO
-      value: https://github.com/<you>/ps-sidecar...
+      value: https://github.com/Mahmud-Buet15/ps-sidecar.git # taking fork from https://github.com/nigelpoulton/ps-sidecar.git
     - name: GIT_SYNC_BRANCH
       value: master
     - name: GIT_SYNC_DEPTH
@@ -556,9 +595,23 @@ spec:
   volumes:
   - name: html
     emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-sidecar
+spec:
+  selector:
+    app: sidecar
+  ports:
+  - port: 80
+  type: LoadBalancer
 ```
 
 - Needs v1.29+. Fork `github.com/nigelpoulton/ps-sidecar`, put your fork URL in `GIT_SYNC_REPO`, apply, browse to the Service's EXTERNAL-IP (or `localhost` on Docker Desktop): "This is version 1.0". Edit `index.html` in your fork and refresh: the sidecar syncs the change.
+  - Connect to the app and see it display *This is version 1.0*
+    - &#32;`kubectl exec git-sync -- curl localhost:80`
+    - Or using external IP: `kubectl get svc svc-sidecar`; and then  `curl <EXTERNAL-IP>:80`
 - Pod shows `2/2 Running`; `describe` events show `ctr-sync` started before `ctr-web`.
 - Show init vs app containers: `kubectl get pod -o "custom-columns=NAME:.metadata.name,INIT:.spec.initContainers[*].name,CONTAINERS:.spec.containers[*].name"`.
 
@@ -966,11 +1019,15 @@ Pods are unreliable, so never connect to them directly: connect through a Servic
 
 Pods get deleted on scale-down, rolling updates, rollbacks, node maintenance/evictions and failures, and replacements get new IPs. A Service sits in front of one or more identical Pods and hides that churn.
 
+&#91;image: image.png\]
+
 - **Front end:** DNS name, IP address and port, guaranteed never to change.
 - **Back end:** a **label selector**; traffic goes to healthy Pods with matching labels. E.g. clients hit `app1:8080` or `10.99.11.23:8080` and reach a Pod labelled `project=tkb`.
 - The Service keeps an up-to-date list of healthy Pods through scaling, rollouts, rollbacks and failures.
 
 ### Labels and loose coupling
+
+&#91;image: image.png\]
 
 A Pod must carry **all** the selector's labels; extra labels don't matter. Selector `project=tkb, zone=prod` matches Pods A, B and D (D has extra labels) but not C (missing one).
 
@@ -1013,8 +1070,8 @@ A LoadBalancer Service creates the NodePort and ClusterIP plumbing for you; in-c
 
 | Type | Reachable from | How |
 | --- | --- | --- |
-| **ClusterIP** (default) | Inside the cluster only | Internal IP routable only on the pod network; name auto-registered in cluster DNS; all containers use cluster DNS. E.g. Service `skippy` lets every app connect to `skippy`. |
-| **NodePort** | Outside, via any node | Adds a port in **30000–32767** on **every node**, mapped to the ClusterIP. Limits: high ports, and clients must know node IPs and health. |
+| **ClusterIP** (default) | Inside the cluster only | Internal IP routable only on the pod network; name auto-registered in cluster DNS; all containers use cluster DNS. E.g. Service `skippy` lets every app connect to `skippy`. Limits: Inside the cluster only |
+| **NodePort** | Outside, via any node | Adds a port in **30000–32767** on **every node**, mapped to the ClusterIP.&#32; Limits: high ports, and clients must know node IPs and health. High vs low ports explained in Further Notes |
 | **LoadBalancer** | Internet | NodePort fronted by an HA **cloud load balancer** with a friendly DNS name on a low port. The easiest way to expose apps externally. |
 
 ```yaml
@@ -1038,11 +1095,42 @@ spec:
     project: tkb
 ```
 
+**ClusterIP Services - Accessing apps from inside the cluster**
+
+&#91;embedded content: ClusterIP request path · 4 steps, inside the cluster only\]
+
+Step 1: the client Pod asks the cluster DNS for the Service name (skippy) and gets back its ClusterIP (10.0.0.50).&#32;
+
+Step 2: it sends the request to the ClusterIP on the Service port (8080).&#32;
+
+Step 3: the Service picks a ready Pod from the EndpointSlice's always-up-to-date list. Step 4: kube-proxy's rules on the node forward the request to that Pod's IP on the targetPort (9000).&#32;
+
+Nothing outside the cluster can route to the ClusterIP, which is why NodePort and LoadBalancer Services are built on top of it.
+
+**NodePort Services - Accessing apps from outside the cluster**
+
+&#91;image: image.png\]Step 1: shows an external client hitting a node on the NodePort
+
+Step 2: shows the node forwarding the request to the ClusterIP of the Service inside the cluster.&#32;
+
+Step 3: The Service picks a Pod from the EndpointSlice’s always-up-to-date list in  and step 4: forwards it to the chosen Pod
+
+**LoadBalancer Services - Accessing apps via load balancers**
+
+&#91;image: image.png\]
+
+Step 1: The client connects to the load balancer via a reliable, friendly DNS name on a low- numbered port, and&#32;
+
+Step 2: the load balancer forwards the request to a NodePort on a healthy cluster node. Step 3: From there, it’s the same as a NodePort Service — a) send to the internal ClusterIP Service, b) select a Pod from the EndpointSlice, and c) send the request to the Pod
+
 ### Hands-on: imperative
 
 - `kubectl apply -f deploy.yml` (Deployment `svc-test`, 10 Pods on 8080, label `chapter=services`).
 - `kubectl expose deployment svc-test --type=LoadBalancer` inspects the Deployment and builds the right selector, ports and DNS records; the Service takes the Deployment's name.
-- `kubectl get svc -o wide` columns: TYPE, CLUSTER-IP (internal only), EXTERNAL-IP (cloud IP/DNS, `localhost` on Docker Desktop; `<pending>` while provisioning), PORT(S) `8080:31755` = LB port : random NodePort, SELECTOR.
+- `kubectl get svc -o wide` columns: TYPE, CLUSTER-IP (internal only), EXTERNAL-IP (cloud IP/DNS, `localhost` on Docker Desktop; `<pending>` while provisioning), PORT(S) `8080:31755` = LB port : random NodePort, SELECTOR column matches the Pod labels.
+
+&#91;image: image.png\]
+
 - The system Service **`kubernetes`** (ClusterIP, 443) exposes the API server to every Pod.
 
 `kubectl describe svc svc-test` extra fields:
@@ -1137,6 +1225,8 @@ Ingress exposes many web apps through **one** cloud load balancer, routing by ho
 | `shield.mcu.com` | `mcu.com/shield` | `shield` |
 | `hydra.mcu.com` | `mcu.com/hydra` | `hydra` |
 
+&#91;image: image.png\]
+
 Traffic flow: client → DNS resolves to the load balancer → Ingress controller reads host/path from HTTP headers → matching rule sends it to the backend **ClusterIP** Service → Service delivers to a Pod.
 
 ### Ingress classes
@@ -1205,6 +1295,41 @@ spec:
 5. **DNS for the lab:** add lines to `/etc/hosts` (Mac/Linux, root) or `C:\Windows\System32\drivers\etc\hosts` (Windows, as admin) mapping `shield.mcu.com`, `hydra.mcu.com` and `mcu.com` to the Ingress address (`127.0.0.1` if it shows localhost). In production use real DNS.
 6. **Test:** `shield.mcu.com` and `hydra.mcu.com` reach their apps; bare `mcu.com` hits the default backend (on GKE: "response 404 (backend NotFound)"); `mcu.com/shield` and `/hydra` use path rewriting.
 7. **Clean up:** delete `ig-all.yml`, `app.yml`, the controller URL, and your hosts-file entries.
+
+### Running the hands-on on GKE (Option 3)
+
+The apps (`app.yml`), the hosts-file step and the tests stay the same. Choose one of two controllers.
+
+**A: the book's NGINX controller (closest to the book)**
+
+- GKE needs one extra step first, because the installer creates cluster-wide RBAC and your Google account must be cluster-admin to do that: `kubectl create clusterrolebinding cluster-admin-binding --clusterrole cluster-admin --user $(gcloud config get-value account)`.
+- Then apply the same controller URL and the same `ig-all.yml`, unchanged. The controller's LoadBalancer Service gets a Google Cloud network load balancer, and ADDRESS shows its public IP. Put that IP in your hosts file.
+- Remember that ingress-nginx is retired (see Deeper dive). That's fine for this lab, but not for real clusters.
+
+**B: GKE's built-in Ingress controller (nothing to install)**
+
+- GKE ships its own controller, which builds a Google Cloud external Application Load Balancer. It's selected by the old annotation, not by `ingressClassName` (GKE ignores that field when the annotation is set). Change the top of `ig-all.yml` and keep the rules:
+
+```yaml
+# ig-all-gke.yml: the book's ig-all.yml for GKE's built-in controller
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcu-all
+  annotations:
+    kubernetes.io/ingress.class: "gce"   # GKE's controller
+    # no rewrite-target: it's NGINX-only
+spec:
+  # no ingressClassName line
+  rules:
+  # ...the same three host rules as ig-all.yml
+```
+
+- The ClusterIP Services work as they are. New GKE clusters are VPC-native, so the load balancer sends traffic straight to Pod IPs (container-native load balancing).
+- Be patient: the load balancer and its health checks take several minutes, so ADDRESS and the first working request come later than with NGINX. The health check requests `/` on each app and expects a 200.
+- Expect two differences from the book. Bare `mcu.com` returns GKE's default backend message, **response 404 (backend NotFound)**. And there's no path rewriting, so `mcu.com/shield` reaches the app as `/shield`, which the app will probably answer with its own 404. Host-based routing works fully.
+
+**Clean up on GKE:** deleting the Ingress (B) or the controller (A) removes its load balancer. Check Network services → Load balancing in the console for anything left behind, because load balancers are billed by the hour.
 
 ### Deeper dive
 
@@ -1442,7 +1567,16 @@ Kubernetes makes service registration and discovery automatic: the cluster DNS r
 
 Apps talk to other apps through their **Services**. To send a request an app needs (1) the other Service's **name** — the developer's job — and (2) a way to turn the name into an **IP** — Kubernetes' job. Only step 1 is manual.
 
+&#91;image: image.png\]A high-level view of the overall process with four main steps:
+
+- **Step 1: **The developer configures **app-a **to talk to **app-b**
+- **Step 2: app-a **asks Kubernetes for the IP address of **app-b **
+- **Step 3: **Kubernetes returns the IP address
+- **Step 4: app-a **sends requests to **app-b’s **IP address
+
 ### The service registry: cluster DNS
+
+&#91;image: image.png\]
 
 - Every cluster has a built-in **cluster DNS** as its service registry: a Kubernetes-native app on the control plane.
 - Two or more **Pods** (image usually `registry.k8s.io/coredns/coredns`) managed by a **Deployment** (`coredns` or `kube-dns`) behind a **Service always named `kube-dns`** (e.g. `10.96.0.10`, ports 53/UDP, 53/TCP, 9153/TCP). All live in `kube-system` with label `k8s-app=kube-dns`.
@@ -1455,13 +1589,23 @@ kubectl get svc    -n kube-system -l k8s-app=kube-dns
 
 ### Service registration (automatic)
 
-1. Give the Service a name (developer), e.g. `valkyrie-web`.
-2. Kubernetes checks the name is unique and assigns a **ClusterIP**.
-3. The cluster DNS, which **watches the API server for new Services**, registers DNS **A and SRV records**.
+There are three steps in service registration:
 
-The full flow: post Deployment + Service YAML → authN/authZ → ClusterIP allocated, config persisted to the cluster store → cluster DNS registers records → EndpointSlices created with matching healthy Pod IPs → **kube-proxy** on every node creates local routing rules (**IPVS**) so ClusterIP traffic reaches Pods. Apps need no registration logic.
+1. Give the Service a name (by developer), e.g. `valkyrie-web`.
+2. Kubernetes checks the name is unique and assigns a **ClusterIP**.
+3. The cluster DNS, which **watches the API server for new Services**, registers DNS **A and SRV records**. A and SRV records explained in Further Notes
+
+&#91;image: image.png\]
+
+**The full flow:** post Deployment + Service YAML → authN/authZ → ClusterIP allocated, config persisted to the cluster store → cluster DNS registers records → EndpointSlices created with matching healthy Pod IPs → **kube-proxy** on every node creates local routing rules (**IPVS**) so ClusterIP traffic reaches Pods. Apps need no registration logic.
+
+IPVS rules explained in Further Notes
 
 ### Service discovery
+
+Assume you have a cluster with two apps called **enterprise **and **cerritos**. The **enterprise **app sits behind a ClusterIP Service called **ent**, and the **cerritos **app sits behind one called **cer**. Kubernetes automatically assigned both Services a ClusterIP, and the cluster DNS automatically registered them. Right now, things are as follows
+
+&#91;image: image.png\]
 
 &#91;embedded content: service discovery · enterprise app calling the cer Service\]
 
@@ -1475,14 +1619,18 @@ nameserver 10.96.0.10      # ClusterIP of the cluster DNS
 options ndots:5
 ```
 
-- An **unqualified** short name (`ent`) gets a search domain appended to form an **FQDN** (`ent.default.svc.cluster.local`).
+- An **unqualified** short name (`ent`) gets a search domain appended to form an fully qualified domain name **(FQDN)** (`ent.default.svc.cluster.local`).
 - **ClusterIP routing:** ClusterIPs are virtual IPs on the **service network**, which has **no routes**. The container sends the packet to its default gateway → the node → the node's default gateway, so the **node kernel** processes it. **kube-proxy** watches for Services and EndpointSlices and programs kernel rules that intercept ClusterIP traffic and redirect it to a healthy Pod IP.
 - A **default gateway** is where a system sends traffic when it doesn't know where else to send it.
+
+**Service discovery process summarized:**
+
+&#91;image: image.png\]
 
 ### Namespaces and the cluster domain
 
 - The **cluster domain** (usually `cluster.local`) is the cluster's address space; names must be unique within it.
-- FQDN format: **`<object-name>.<namespace>.svc.cluster.local`**.
+- FQDN (fully qualified domain name) format: **`<object-name>.<namespace>.svc.cluster.local`**.
 - Namespaces partition the address space (`<svc>.dev.svc.cluster.local`, `<svc>.prod.svc.cluster.local`), so names need only be unique **within** a Namespace. Identical dev and prod setups can share one cluster.
 - **Short names resolve to the local Namespace; use the FQDN to reach another Namespace.**
 
@@ -1564,11 +1712,23 @@ Apps request storage with a **PersistentVolumeClaim**; a **StorageClass** dynami
 
 ### The big picture: three layers
 
+&#91;image: image.png\]
+
 1. **Storage providers** (left): external systems with block, file and object storage and advanced services (backup, replication, snapshots, encryption) — on-prem (EMC, NetApp) or cloud.
 2. **Plugin layer** (middle): the **Container Storage Interface (CSI)**, the industry-standard interface between orchestrators and storage. Plugins are developed **out-of-tree**: no need to be open source, released on their own schedule. (Old **in-tree** plugins lived in the Kubernetes codebase and were tied to its release cycle.)
 3. **Persistent volume subsystem** (right): standard API objects — **PV** maps an external volume, **PVC** grants access to a PV, **SC** makes it all automatic and dynamic.
 
-&#91;embedded content: dynamic provisioning · Pod, PVC, StorageClass, CSI plugin, PV\]
+&#91;image: image.png\]
+
+**The book's AWS workflow in seven steps** (a Pod needing 50GB):
+
+1. The Pod requests the volume through a **PVC**.
+2. The PVC asks its **StorageClass** for a new PV and backend volume.
+3. The SC calls the AWS backend through the **AWS CSI plugin**.
+4. The plugin creates a **50GB EBS volume** on AWS.
+5. The plugin reports the new volume back to the SC.
+6. The SC creates a **PV** and maps it to the EBS volume.
+7. The Pod **mounts** the PV and uses it.
 
 The Pod never talks to the storage system; it only references a PVC, and the StorageClass and CSI plugin do the rest.
 
@@ -1700,17 +1860,44 @@ spec:
 - Now PVC is **Bound**, a 20Gi PV exists with reclaim **Retain**; `kubectl describe pod volpod` shows `/tkb from data (rw)`.
 - **Clean-up order with Retain:** delete Pod → delete PVC → delete PV manually (`kubectl delete pv <name>`) → delete the backend volume in the cloud console (or keep paying) → delete the SC.
 
+### Running the hands-on on GKE (Option 3)
+
+GKE's storage CSI driver is the **Compute Engine Persistent Disk driver**, `pd.csi.storage.gke.io`. It's preinstalled, so the PVs, PVCs and Pods stay the same; only the StorageClasses change.
+
+- `kubectl get sc` shows **`standard-rwo` (default)** (balanced Persistent Disk, Delete, WaitForFirstConsumer, expandable), `premium-rwo` (SSD), and a legacy `standard` class.
+- **Hands-on 1 changes:** none of GKE's PD CSI classes is Immediate, so a PVC on `standard-rwo` stays **Pending** until a Pod uses it. To see the book's "Bound immediately" behaviour, create an Immediate class and set `storageClassName: gke-block` in `lke-pvc-test.yml`. (Immediate is safe here because a zonal cluster has only one zone.)
+- **Hands-on 2 changes:** use `gke-sc-wait-keep.yml` instead of `lke-sc-wait-keep.yml`. It keeps the name `block-wait-keep`, so the PVC and `volpod` files work as they are.
+
+```yaml
+# gke-sc-immediate.yml: stands in for linode-block-storage (Hands-on 1)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gke-block
+provisioner: pd.csi.storage.gke.io
+parameters:
+  type: pd-balanced
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+reclaimPolicy: Delete
+---
+# gke-sc-wait-keep.yml: replaces lke-sc-wait-keep.yml (Hands-on 2)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: block-wait-keep
+provisioner: pd.csi.storage.gke.io
+parameters:
+  type: pd-balanced
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+```
+
+- **Where the volume shows up:** Compute Engine → Disks, or `gcloud compute disks list`. Each disk is named after its PV (`pvc-...`) and sits in the cluster's zone. The book's 10Gi and 20Gi sizes are fine, because a balanced disk's minimum is 10 GB.
+- **Clean-up with Retain:** follow the same order. For the last step, delete the disk itself with `gcloud compute disks delete <pv-name> --zone us-central1-a`, or it keeps costing money after the cluster is gone.
+
 ### Deeper dive
-
-**The book's AWS workflow in seven steps** (a Pod needing 50GB):
-
-1. The Pod requests the volume through a **PVC**.
-2. The PVC asks its **StorageClass** for a new PV and backend volume.
-3. The SC calls the AWS backend through the **AWS CSI plugin**.
-4. The plugin creates a **50GB EBS volume** on AWS.
-5. The plugin reports the new volume back to the SC.
-6. The SC creates a **PV** and maps it to the EBS volume.
-7. The Pod **mounts** the PV and uses it.
 
 **Storage tiers as StorageClasses** (the book's example for one external array):
 
@@ -1803,6 +1990,18 @@ data:
 | Environment variables | `env[].valueFrom.configMapKeyRef` (name + key) | No — static, set at container start |
 | Startup command arguments | Env vars referenced in `command`, e.g. `$(FIRSTNAME)` | No — same limitation |
 | Volume (**preferred**) | `volumes[].configMap` + `volumeMounts`; each key becomes a file | **Yes** — updates appear in a minute or two |
+
+**ConfigMap** (`f``u``llname``.yml`):
+
+```yaml
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: multimap
+data:
+  firstname: Nigel
+  lastname: Poulton
+```
 
 **Environment variables** (`podenv.yml`):
 
@@ -2164,6 +2363,146 @@ spec:
 - Pair them with a headless governing Service for per-Pod DNS records; apps must be written to use them.
 - PVCs outlive Pods; always scale to zero before deleting a StatefulSet. StatefulSets are a framework: apps must be designed to exploit it.
 
+## Extra Chapter — DaemonSets
+
+*Not a chapter in the book: an extra chapter, written in the same style, to fill a gap between Deployments (Ch 6) and StatefulSets (Ch 13).*
+
+A **DaemonSet** runs **one copy of a Pod on every node**, or on every node you select. When a node joins the cluster, the DaemonSet adds a Pod to it; when a node leaves, its Pod is cleaned up. You never set a replica count: **the number of nodes is the replica count**. It's the controller for node-level agents, the things every machine needs.
+
+### What DaemonSets are for
+
+- **Log collectors** that read each node's container logs (Fluent Bit, Fluentd, Vector).
+- **Monitoring agents** that report each node's CPU, memory and disk (Prometheus node-exporter, Datadog agent).
+- **Networking:** kube-proxy itself and the CNI agent that builds the pod network (Cilium, Calico, kindnet) usually run as DaemonSets in `kube-system`.
+- **Storage:** the node half of a CSI plugin (Ch 11), which mounts volumes into Pods on that node.
+- **Security agents** that watch every node's system calls or files (Falco and similar).
+
+See the ones your cluster already runs with `kubectl get daemonsets -n kube-system`. On Docker Desktop's kind cluster you'll typically find `kube-proxy` and `kindnet`.
+
+### DaemonSets vs Deployments
+
+|  | Deployment (Ch 6) | DaemonSet |
+| --- | --- | --- |
+| How many Pods | `replicas: N`, any number | one per matching node |
+| Where they run | wherever the scheduler finds room; several can land on one node | exactly one on each matching node |
+| Scaling | change `replicas` or use an autoscaler | add or remove nodes, or change which nodes match |
+| Typical workload | stateless apps users call (web, APIs) | node agents (logs, metrics, networking, storage) |
+| Updates | rolling, through ReplicaSets | rolling or OnDelete, node by node, through ControllerRevisions |
+
+### How it works
+
+- The **DaemonSet controller** in the controller manager watches nodes and DaemonSets (the usual watch loop from Ch 2). For each matching node without a Pod, it creates one; for each Pod on a node that no longer matches, it deletes it.
+- Each Pod is created with a **node affinity that pins it to one node by name**. The normal scheduler then binds it, so resource requests, priority and preemption work as for any Pod.
+- **Tolerations are added automatically**, so node agents keep running when nodes are in trouble or being emptied: `not-ready` and `unreachable` (NoExecute), `disk-pressure`, `memory-pressure`, `pid-pressure` and `unschedulable` (NoSchedule), plus `network-unavailable` for Pods on the host network. That's why a DaemonSet Pod still runs on a **cordoned** node.
+- **The control plane taint is not tolerated by default.** Control plane nodes carry `node-role.kubernetes.io/control-plane:NoSchedule`, so add that toleration yourself if the agent must run there too.
+- **Choose nodes** with `nodeSelector` or node affinity in the Pod template, for example only nodes labelled `gpu=true` for a GPU driver agent.
+
+### The YAML (ds.yml)
+
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-agent
+spec:
+  selector:
+    matchLabels:
+      app: node-agent
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1             # update one node at a time (the default)
+  template:
+    metadata:
+      labels:
+        app: node-agent             # must match spec.selector
+    spec:
+      tolerations:                  # also run on the control plane node
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: agent
+        image: busybox:1.36
+        command: ["sh", "-c", "while true; do echo \"$(date) agent on $NODE_NAME\"; ls /host/var/log | head -3; sleep 30; done"]
+        env:
+        - name: NODE_NAME           # the Downward API: which node am I on?
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        resources:
+          requests: {cpu: 10m, memory: 16Mi}
+          limits: {memory: 32Mi}
+        volumeMounts:
+        - name: varlog
+          mountPath: /host/var/log
+          readOnly: true
+      volumes:
+      - name: varlog                # the node's own /var/log
+        hostPath:
+          path: /var/log
+```
+
+- There is **no `replicas` field**.
+- `hostPath` gives the Pod a folder from the node itself. That's what lets log and metrics agents read node data, and also why such Pods need careful security (see Deeper dive).
+- `spec.nodeName` through the Downward API tells each copy which node it's on, which is handy for labelling logs and metrics.
+
+### Hands-on (Docker Desktop, 3 nodes)
+
+- Apply and inspect: `kubectl apply -f ds.yml`, then `kubectl get ds node-agent` shows **DESIRED 3, CURRENT 3, READY 3, UP-TO-DATE 3, AVAILABLE 3**, one per node. Without the toleration, DESIRED would be **2** (the workers only).
+- `kubectl get pods -l app=node-agent -o wide` shows one Pod on each of `desktop-control-plane`, `desktop-worker` and `desktop-worker2`. `kubectl logs <pod>` prints that node's name every 30 seconds.
+- **Pick nodes with a label:** `kubectl label node desktop-worker agent=yes`, then add `nodeSelector: {agent: "yes"}` to the Pod template and re-apply. DESIRED drops to **1** and the other two Pods are deleted. Label another node and a Pod appears there within seconds; remove the label (`kubectl label node desktop-worker agent-`) and its Pod goes away.
+- **Rolling update:** `kubectl set image ds/node-agent agent=busybox:1.37`, then `kubectl rollout status ds/node-agent` replaces the Pods one node at a time. `kubectl rollout history ds/node-agent` and `kubectl rollout undo ds/node-agent` work just as for Deployments.
+- **Drain behaviour:** `kubectl drain desktop-worker` **refuses** while DaemonSet Pods are on the node, unless you add `--ignore-daemonsets`. With that flag it evicts the other Pods but leaves the DaemonSet Pods running, because the controller would only recreate them. Run `kubectl uncordon desktop-worker` afterwards.
+- Clean up: `kubectl delete -f ds.yml` and remove any labels you added.
+
+### Deeper dive
+
+**Update strategies:**
+
+| Strategy | What happens on a change to the Pod template |
+| --- | --- |
+| `RollingUpdate` (default) | old Pods are replaced node by node; `maxUnavailable` (default 1) sets how many nodes can be without a ready agent at once |
+| `RollingUpdate` with `maxSurge` | the new Pod starts on a node **before** the old one stops, so the node is never without its agent (needs `maxUnavailable: 0`) |
+| `OnDelete` | nothing happens until you delete a Pod yourself; its replacement uses the new template. Good for agents you update by hand, one carefully chosen node at a time |
+
+`minReadySeconds` makes the rollout wait until a new Pod has been ready for that long before moving to the next node, as with Deployments.
+
+**DaemonSets vs static Pods (Ch 4).** Both put a Pod on a node, but differently:
+
+|  | Static Pod | DaemonSet Pod |
+| --- | --- | --- |
+| Defined in | a manifest file in the kubelet's folder on that node | one object in the API server |
+| Managed by | that node's kubelet only | the DaemonSet controller and the scheduler |
+| Covers new nodes | no: you copy the file to each node | yes, automatically |
+| Updated by | editing files on every node | `kubectl apply`, with rolling updates and rollbacks |
+| Typical use | the control plane itself (API server, etcd) on kubeadm clusters | everything else node-wide |
+
+**Costs add up.** A DaemonSet's requests are reserved on **every** node: an agent requesting 200Mi on 50 nodes holds 10Gi. Keep agents small and set requests and limits.
+
+**Keep critical agents scheduled.** If a node is full, a new DaemonSet Pod can sit Pending. Give important agents (networking, storage, logging) `priorityClassName: system-node-critical` so the scheduler can preempt lower-priority Pods to make room, and so they're the last to be evicted under pressure.
+
+**Security (links to Ch 16–17).** Node agents often need `hostPath`, `hostNetwork` or privileged mode, which the **restricted** Pod Security Standard forbids. Run them in their own Namespace (for example `monitoring`, or `kube-system` for system agents) with a Pod Security level that allows what they need. Mount host folders **read-only**, and give their ServiceAccount only the RBAC it needs. A compromised node agent sits on every machine in the cluster.
+
+**Troubleshooting checklist:**
+
+- **DESIRED lower than your node count?** Check node taints (`kubectl describe node <name>` → Taints) and the DaemonSet's `nodeSelector` and affinity.
+- **Pods Pending?** `kubectl describe pod <pod>` usually shows insufficient CPU or memory on that node. Lower the requests or raise the priority.
+- **Rollout stuck?** `kubectl rollout status ds/<name>` and `kubectl describe ds <name>`; a new Pod failing its readiness probe on one node stops the rollout there, which is the point of rolling one node at a time.
+- **A Pod didn't move after you changed a node's labels?** It should be removed within seconds. If not, check the DaemonSet's events and the controller manager.
+
+**Going further:**
+
+- **Jobs on every node:** a DaemonSet keeps its Pods running forever. For a one-off task on every node (say, clearing a cache), people use a DaemonSet whose container does the task and then sleeps, or a Job per node.
+- **Managed clusters:** providers run many of their own agents as DaemonSets (logging, metrics, CSI, metadata servers). On GKE, `kubectl get ds -n kube-system` shows them, and you should leave them alone.
+
+### Takeaways
+
+- DaemonSet = one Pod per matching node, kept that way automatically as nodes come and go.
+- Use it for node-level agents: logs, metrics, networking, storage, security.
+- Target nodes with `nodeSelector`, affinity and tolerations; the control plane needs an explicit toleration.
+- Updates roll node by node (`RollingUpdate`, optionally with `maxSurge`) or wait for you (`OnDelete`), with the same rollout commands as Deployments.
+
 ## Chapter 14 — API security and RBAC
 
 Every request to the API server, from kubectl, Pods, kubelets, control plane services or Kubernetes-native apps, travels over TLS and must pass **authentication**, then **authorization**, then **admission control** before it runs.
@@ -2350,6 +2689,8 @@ kubectl auth can-i --list -n shield                         # everything you may
 ## Chapter 15 — The Kubernetes API
 
 Kubernetes is **API-centric**: every resource is defined in the API and every create, read, update and delete goes through the API server as a RESTful HTTPS request. The API is split into the original **core group** (`/api/v1`) and **named groups** (`/apis/<group>/<version>`), and you can extend it with **CustomResourceDefinitions**.
+
+RESTful APIs explained, with examples, in Further Notes
 
 ### Big picture and jargon
 
@@ -2580,6 +2921,8 @@ Threat modeling identifies vulnerabilities so you can prevent or mitigate them. 
 - mTLS is only as secure as the CA — **protect the CA**. Approve certificate signing requests carefully and never trust the cluster CA outside the cluster.
 - Use **two trusted key pairs**: the cluster CA for internal systems, trusted third-party CA(s) for external ones.
 
+What a CA is, how it works, and these three points explained in Further Notes
+
 **Pods.** Every Pod has a **ServiceAccount** identity whose token is auto-mounted as a Secret and grants API server access. Most Pods don't need it:
 
 ```yaml
@@ -2675,6 +3018,10 @@ spec:
 
 **Applications:** resource requests/limits, **Network Policies** for Pod-to-Pod and Pod-to-external traffic, **mTLS and API-token authentication** (reject unauthenticated requests), and least-privilege application-level authorization.
 
+&#91;image: image.png\]
+
+*Fig: **Combining strategies to make it hard for an attacker to successfully DoS an application*
+
 ### Elevation of privilege
 
 **Protecting the API server** with authorizers (run several together, commonly RBAC + Node):
@@ -2709,6 +3056,12 @@ securityContext:
 ```
 
 3. **Filter syscalls with seccomp** (GA in v1.19):
+
+*Seccomp*, short for secure computing, is similar in concept to capabilities but works by filtering syscalls rather than capabilities.
+
+The way an application asks the Linux kernel to perform an operation is by issuing a *syscall*. seccomp lets you control which syscalls a particular container can make to the host kernel.
+
+You can use it in different ways based on the following seccomp profiles:
 
 | Profile | Behaviour |
 | --- | --- |
@@ -2844,6 +3197,9 @@ A security architect's high-level view (not a cookbook) of four areas: the **sof
 **Approved base images**
 
 - Images = base layer (OS/filesystem) + libraries/dependencies + app. Maintain a **small set of approved, hardened base images** derived from official ones (e.g. hardened Alpine, Alpine+NGINX).
+
+&#91;image: image.png\]
+
 - Benefits: standard drivers, known patches, standard audit settings, less sprawl, simpler testing, patching and troubleshooting, fewer support contracts; developers focus on apps.
 - For non-standard needs: find out why an approved image won't do, whether one can be extended (e.g. add a GPU driver) and the support implications of anything new. Usually **extend an existing base** rather than add a new one.
 
@@ -2893,7 +3249,13 @@ A security architect's high-level view (not a cookbook) of four areas: the **sof
 
 - The pod network comes from **CNI** plugins, broadly **overlay** or **BGP**.
 - **Overlay** (most common): a flat Layer-2 network on top of Layer-3 infrastructure using **VXLAN** encapsulation. Encapsulation **hides real source/destination IPs** from firewalls.
+
+&#91;image: image.png\]
+
 - **BGP** (the internet's routing protocol; peers share routes, like passing a birthday card via friends of friends) **doesn't encapsulate**, so it's easier for firewalls.
+
+&#91;image: image.png\]
+
 - If your firewalls can't inspect encapsulated packets, consider a BGP pod network. Combine **physical firewalls** (central team; beware slow change processes) and **host-based firewalls** (OS teams) for the most security.
 - **Packet capture:** Pod IPs are obscured and churn (re-used by other Pods), so tools that map IPs to Pod IDs, Service names and container IDs are very useful.
 
@@ -2965,7 +3327,7 @@ A container process running as **root** could gain root on the worker node and e
 
 **IAM lifecycle in practice.** Joiner: HR creates the person in AD/IAM → added to a group → a RoleBinding to that group grants Kubernetes access automatically. Leaver: HR removes them → the identity disappears → Kubernetes access stops, with no cluster-side clean-up. This is why Kubernetes deliberately has no user database of its own.
 
-**Why alert on those three events:**
+**Why alert on those three events: **
 
 | Event | Why it's suspicious | Expected source |
 | --- | --- | --- |
